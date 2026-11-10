@@ -1,4 +1,4 @@
-"""Color Match Detailer Hook for ComfyUI-Impact-Pack.
+"""Multi-mode Color Match Detailer Hook for ComfyUI-Impact-Pack.
 
 Import the actual Impact hook base lazily in doit(), so custom-node startup
 order does not matter. No Impact Pack files need modification.
@@ -8,7 +8,7 @@ import logging
 import numpy as np
 import torch
 
-from .color_math import match_lab
+from .color_math import METHODS, match_color
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +22,9 @@ class ColorMatchDetailerHookProvider:
             "reference_region": (["masked", "whole_crop"],),
             "match_luminance": ("BOOLEAN", {"default": False}),
             "mask_erosion": ("INT", {"default": 5, "min": 0, "max": 64, "step": 1}),
+            # Append new widgets so existing workflow widget order is preserved.
+            "method": (list(METHODS),),
+            "boundary_width": ("INT", {"default": 24, "min": 1, "max": 128, "step": 1}),
         }}
 
     RETURN_TYPES = ("DETAILER_HOOK",)
@@ -29,13 +32,14 @@ class ColorMatchDetailerHookProvider:
     FUNCTION = "doit"
     CATEGORY = "ImpactPack/Detailer/Hooks"
     DESCRIPTION = (
-        "Match each diffused SEGS crop's LAB colors to the *same original crop*, "
-        "after VAE decode and before final compositing. Masked statistics require "
-        "the detailer's noise_mask to be enabled. Supports DetailerHookCombine."
+        "Match each diffused SEGS crop to its original crop with selectable "
+        "LAB, boundary-aware, RGB statistical or histogram methods. "
+        "Runs after VAE decode and before compositing; supports DetailerHookCombine."
     )
 
     def doit(self, enabled=True, strength=0.5, reference_region="masked",
-             match_luminance=False, mask_erosion=5):
+             match_luminance=False, mask_erosion=5, method="lab_chroma",
+             boundary_width=24):
         # Called only when the workflow runs, after all custom nodes have loaded.
         from impact.hooks import DetailerHook
 
@@ -90,12 +94,14 @@ class ColorMatchDetailerHookProvider:
                             elif candidate.ndim != 2:
                                 raise ValueError(f"Unexpected mask shape: {tuple(mask.shape)}")
                             m = candidate.numpy()
-                        corrected.append(match_lab(
+                        corrected.append(match_color(
                             src, dst, m,
                             strength=strength,
                             match_luminance=match_luminance,
                             reference_region=reference_region,
                             mask_erosion=mask_erosion,
+                            method=method,
+                            boundary_width=boundary_width,
                         ))
                     result = torch.from_numpy(np.stack(corrected, axis=0)).to(
                         device=decoded.device, dtype=decoded.dtype
@@ -112,5 +118,5 @@ NODE_CLASS_MAPPINGS = {
     "ColorMatchDetailerHookProvider": ColorMatchDetailerHookProvider,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ColorMatchDetailerHookProvider": "Color Match Detailer Hook (LAB)",
+    "ColorMatchDetailerHookProvider": "Color Match Detailer Hook (Multi-Mode)",
 }
