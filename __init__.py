@@ -10,6 +10,7 @@ import torch
 
 from .color_math import METHODS, match_color
 from .debug_overlay import SegsDebugOverlayNode
+from .mask_logic import SegsBBoxMaskNode, MaskExpressionNode, ApplyMaskToSegsNode
 
 log = logging.getLogger(__name__)
 
@@ -118,8 +119,14 @@ class ColorMatchDetailerHookProvider:
 NODE_CLASS_MAPPINGS = {
     "ColorMatchDetailerHookProvider": ColorMatchDetailerHookProvider,
     "SegsDebugOverlayNode": SegsDebugOverlayNode,
+    "SegsBBoxMaskNode": SegsBBoxMaskNode,
+    "MaskExpressionNode": MaskExpressionNode,
+    "ApplyMaskToSegsNode": ApplyMaskToSegsNode,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ColorMatchDetailerHookProvider": "Color Match Detailer Hook (Multi-Mode)",
     "SegsDebugOverlayNode": "SEGS Debug Overlay",
+    "SegsBBoxMaskNode": "SEGS BBox Mask",
+    "MaskExpressionNode": "Mask Logic Expression",
+    "ApplyMaskToSegsNode": "Apply Mask To SEGS",
 }
