@@ -96,3 +96,51 @@ python -m unittest discover -s tests -v
 ```
 
 Tests cover all matching methods, backwards compatibility, mask behavior, and the Impact callback interface.
+
+
+## SEGS Debug Overlay (new)
+
+Search for **SEGS Debug Overlay** under `ImpactPack/Detailer/Hooks`. This standalone diagnostic node takes an `IMAGE` plus Impact Pack `SEGS`, and overlays detection details on the **original image**.
+
+```text
+Original image -------------------> SEGS Debug Overlay ----> Preview Image
+                                            |                  (annotated)
+BBOX Detector (SEGS) ----------------------> SEGS
+                                            |
+                                            +----> SEGS passthrough to Detailer (SEGS)
+                                            +----> combined_segs_mask (MASK)
+                                            +----> combined_matching_mask (MASK)
+```
+
+The overlay uses color-coded layers:
+
+| Color | Visualization | Widget |
+| --- | --- | --- |
+| Amber | The original detected bounding box, with confidence/label | `show_bbox` |
+| Cyan | The crop region after `bbox_crop_factor` and any SEGS transformations | `show_crop_region` |
+| Green | The SEGS mask actually supplied to the detailer | `show_segs_mask` |
+| Magenta | Pixels used by the selected color-matching method to calculate statistics | `show_matching_region` |
+| Blue | Optional full-image include-mask preview | `show_include_mask` |
+| Red | Optional full-image exclude-mask preview | `show_exclude_mask` |
+
+Adjust `overlay_alpha` and `matching_alpha` independently from 0 to 1. Boxes and crop outlines remain visible even when masks are hidden. `thickness=0` automatically sizes lines for the image.
+
+The overlay also outputs:
+
+- `image`: annotated RGB image for Preview Image or Save Image.
+- `segs`: original unchanged SEGS for the downstream Detailer (SEGS).
+- `combined_segs_mask`: the full-image union of detected region masks.
+- `combined_matching_mask`: the full-image union of pixels selected for color statistics. These two mask outputs do **not** depend on which overlays are enabled.
+
+### Matching-region preview
+
+Set `method`, `reference_region`, `mask_erosion`, and `boundary_width` to the same values as your **Color Match Detailer Hook (Multi-Mode)** node. For `boundary_chroma`, it visualizes the *inner mask boundary* used for color statistics, not a separate face-detection mask.
+
+You can connect `include_mask_opt` and `exclude_mask_opt` to inspect how semantic segmentation would constrain the sample. **These inputs currently affect only the debug overlay, not the Color Match Detailer Hook**. The hook does not yet expose external include/exclude mask inputs; until that is added, these are exploratory visualizations.
+
+**Notes and limits:**
+- Matching-region coordinates are calculated at the **input image/crop resolution**. Impact Pack may upscale the crop internally before color matching; if so, `mask_erosion` and `boundary_width` may not correspond to identical numbers of original-image pixels.
+- The preview assumes the detailer's `noise_mask` is enabled. If it is disabled, the hook will fall back to whole-crop statistics despite a SEGS mask being present.
+- The overlay uses the original RGB pixels for region selection; its tints never feed into the matching calculations.
+- The BBOX and crop outlines show the current SEGS object, so they reflect any prior SEGS transformations. A crop may be clamped at the image edge.
+- For the most reliable diagnostics, use the same source resolution as the detector and inspect `combined_matching_mask` with Preview Mask.
