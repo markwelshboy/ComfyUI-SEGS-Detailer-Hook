@@ -1,87 +1,98 @@
-# ComfyUI SEGS Detailer Hook — LAB Color Match
+# ComfyUI SEGS Detailer Hook — Multi-Mode Color Match
 
-A ComfyUI custom node that adds **mask-aware LAB color matching** to the [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) **Detailer (SEGS)** and **FaceDetailer** nodes.
+A ComfyUI custom node for [Impact Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) **Detailer (SEGS)** and **FaceDetailer**. Compare **six color-matching methods** without changing the detector, crop, seed or diffusion settings.
 
-The hook captures the original detailer crop in `post_upscale()`, then adjusts the regenerated crop's color in `post_decode()` **after diffusion and VAE decoding but before the final masked composite**. No Impact Pack source modifications are needed.
+The hook saves the **original crop** in Impact Pack's `post_upscale()`, corrects the decoded result in `post_decode()`, and returns the corrected crop for Impact Pack's normal masked compositing. No Impact Pack modifications or separate crop-reference image are required.
 
-## Installation
-
-On RunPod or another ComfyUI host:
+## Install / update
 
 ```bash
 cd /opt/ComfyUI/custom_nodes
 git clone https://github.com/markwelshboy/ComfyUI-SEGS-Detailer-Hook.git
+# Restart ComfyUI
 ```
 
-Restart ComfyUI. Your ComfyUI installation needs Impact Pack, PyTorch, NumPy and OpenCV; these are normally already available in an installation that runs Impact Pack. The node imports Impact Pack's hook base at execution time, so startup import order does not matter.
-
-### Updating
+For an existing installation:
 
 ```bash
 cd /opt/ComfyUI/custom_nodes/ComfyUI-SEGS-Detailer-Hook
 git pull --ff-only
+# Restart ComfyUI, then refresh the browser
 ```
 
-Restart ComfyUI after updating.
+Requires Impact Pack, PyTorch, OpenCV and NumPy (normally already installed with Impact Pack). The hook imports Impact Pack's hook base at run time, so node startup order does not matter.
 
-## Usage
+## Connecting it
 
-Search for **Color Match Detailer Hook (LAB)** under `ImpactPack/Detailer/Hooks`.
-
-Connect its `detailer_hook` output to the `detailer_hook` input on **Detailer (SEGS)** or **FaceDetailer**.
+Search for **Color Match Detailer Hook (Multi-Mode)** under `ImpactPack/Detailer/Hooks`. Connect its `DETAILER_HOOK` output to **Detailer (SEGS)** or **FaceDetailer**'s `detailer_hook` input.
 
 ```text
-BBOX Detector ───> SEGS ───> Detailer (SEGS) ───> Final image
-                                 ▲
-                                 │ detailer_hook
-                      Color Match Detailer Hook (LAB)
+Image + SEGS ---> Detailer (SEGS) ---> Final composite
+                       ^
+                       | detailer_hook
+              Color Match Detailer Hook (Multi-Mode)
 ```
 
-The original crop and cropped noise mask are captured automatically; you do not need a separate image input. Each SEGS region is processed independently, using its **own original crop** for comparison rather than whole-image statistics.
+The **node type ID remains `ColorMatchDetailerHookProvider`**, so previous workflows remain compatible. The original five widgets are in their original order, followed by `method` and `boundary_width`; the original LAB-chroma behavior remains the default.
 
-## Inputs
+## Modes
 
-| Setting | Default | What it does |
+| `method` | Description | Typical use |
 | --- | --- | --- |
-| `enabled` | `true` | Enable or bypass matching |
-| `strength` | `0.50` | Blend between uncorrected (0) and fully corrected (1) |
-| `reference_region` | `masked` | Select masked pixels or the entire crop for color statistics |
-| `match_luminance` | `false` | Leave generated luminance/contrast alone by default; match only LAB chroma |
-| `mask_erosion` | `5` | Exclude a small number of pixels near mask edges when calculating statistics |
+| `lab_chroma` **(default)** | Match LAB a/b mean and capped standard deviation, without changing lightness by default | Reliable baseline for skin/face color casts |
+| `lab_full` | Match LAB L/a/b mean and capped standard deviation; **always includes luminance** | Fix both color and exposure mismatch |
+| `chroma_mean_only` | Adjust LAB a/b *mean* without changing chroma spread | Gentler skin-tone correction that preserves variation |
+| `boundary_chroma` | Use an **inner strip along the mask boundary**, with a dominant-color similarity filter, to estimate LAB a/b mean shifts | Experiment for seams along face/skin boundaries |
+| `rgb_mean_std` | RGB channel-wise mean/std matching | Baseline comparison, can change brightness |
+| `rgb_histogram` | RGB channel-wise quantile/histogram matching | Experimental, potentially aggressive; use low strength |
 
-For Krea 2 facial detailing, try **strength 0.25–0.60, masked, match_luminance off, mask_erosion 5**.
+All modes compare corresponding pixels **in the same original and regenerated crop**, not the full image. A cropped BBOX mask is rectangular—not a skin mask. The boundary mode's similarity filter is a heuristic, **not a skin segmentation model**, and cannot guarantee that hair or clothing are excluded. If a boundary ring has too few reliable samples, it falls back to masked-crop statistics.
 
-**Masked mode needs `noise_mask = enabled`** on the detailer for the mask to reach the hook. If no mask is supplied, the hook falls back to whole-crop statistics. For diagnosing visible sampling transitions, try `noise_mask_feather = 0` separately; that is an Impact Pack diffusion setting, not a color-match setting.
+## Settings
 
-## How the color correction works
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `enabled` | `true` | Bypass without removing the hook |
+| `strength` | `0.50` | Blend 0 (uncorrected) to 1 (fully color matched) |
+| `reference_region` | `masked` | `masked` statistics only inside the mask, or `whole_crop` |
+| `match_luminance` | `false` | Include lightness in LAB modes (except `lab_full`, which always does). Ignored in RGB modes |
+| `mask_erosion` | `5` | Exclude edge pixels from the statistics (working crop pixels) |
+| `method` | `lab_chroma` | Select one of the six matching methods |
+| `boundary_width` | `24` | Approximate inner boundary band width, **in working-crop pixels**; used only by `boundary_chroma` |
 
-1. Save the original crop at the working resolution and its optional noise mask.
-2. After sampling and VAE decode, resize the original reference if needed to match the generated crop.
-3. Calculate corresponding original and generated pixel statistics in CIELAB using either the masked interior or the whole crop.
-4. Adjust chroma (LAB a/b) by default; optionally include lightness (L).
-5. Interpolate the correction using `strength`, then return the crop to Impact Pack for its normal resizing and SEGS-mask compositing.
+**For `boundary_chroma`, use `reference_region = masked` and `noise_mask = enabled` on the detailer.** Without a mask, boundary mode becomes whole-crop mean-only LAB matching. `reference_region = whole_crop` bypasses boundary selection.
 
-Using the masked region for statistics generally avoids background and clothing skewing facial colors. **A BBOX mask is rectangular and includes eyes, lips and possibly hair: the hook is mask-aware, not skin-specific.** For skin-only matching, provide a skin segmentation mask in a separate workflow.
+The hook sees the detailer's `noise_mask` (if enabled) in `post_upscale`. `noise_mask_feather` is Impact Pack's separate diffusion-mask setting; setting it above zero may enable differential diffusion. Use `noise_mask_feather = 0` when isolating color-match differences.
 
-## Combining hooks
+## Suggested A/B comparison
 
-Use Impact Pack's `DetailerHookCombine` node to combine this with compatible detailer hooks. Hooks are applied in order; if another hook modifies decoded colors, put this color-match hook **second** so its `post_decode()` adjustment runs after that change.
+Use the same source image, BBOX detection, SEGS crop, seed, steps, denoise and all other detailer settings for each method. Start with:
 
-## Limitations
+- `reference_region = masked`
+- `match_luminance = false`
+- `mask_erosion = 5`
+- `strength = 0.40`
+- `boundary_width = 24`
 
-- Color matching is global across each crop; it doesn't perform spatially varying lighting correction or alter the mask boundary.
-- The final affected pixels are controlled by Impact Pack's SEGS mask and `feather` setting, not by this hook.
-- An empty or too-small masked selection (fewer than 64 pixels) is left unchanged.
-- Regular ComfyUI RGB image crops and single-leading-dimension 5D outputs are handled; arbitrary video formats are not.
-- The hook keeps temporary state while each SEGS region processes. It is intended for Impact Pack's sequential per-region processing.
-- The Python unit tests cover color-statistics behavior but do not constitute an end-to-end ComfyUI integration test.
+Try `lab_chroma` vs `chroma_mean_only` vs `boundary_chroma` first. Use `lab_full` when the patch is darker/brighter, and `rgb_mean_std` / `rgb_histogram` for benchmarks. Lower strength for histogram matching.
 
-## Tests
+The `strength=0` run is a useful **no-color-match control**. Save both the full output and a zoom on the mask boundary; judge color continuity, texture, skin lighting and identity.
 
-From this repository directory, run:
+## Technical details and limitations
+
+- After diffusion and VAE decode, the original crop is resized if needed, LAB/RGB matching applied, and the corrected crop returned. Impact Pack then downscales it and composites it with its own mask.
+- All modes apply a global color transformation to the regenerated crop; **boundary-aware describes where statistics are sampled**, not a spatially varying seamless-clone algorithm.
+- Correction may affect an entire regenerated crop internally; **only Impact Pack's final SEGS mask controls visible compositing**.
+- To evaluate the real visible effect, compare the final composited `IMAGE` output rather than just the cropped/decoded preview.
+- Small/empty masks are left unchanged.
+- Supports `DetailerHookCombine`. If another hook adjusts decoded colors, place this color-match hook second to run its `post_decode` adjustment afterward.
+- Verified with unit and mocked hook-interface tests. A real ComfyUI/RunPod end-to-end run is still required.
+
+## Run tests
 
 ```bash
+cd /opt/ComfyUI/custom_nodes/ComfyUI-SEGS-Detailer-Hook
 python -m unittest discover -s tests -v
 ```
 
-The tests require NumPy and OpenCV but not a running ComfyUI instance.
+Tests cover all matching methods, backwards compatibility, mask behavior, and the Impact callback interface.
