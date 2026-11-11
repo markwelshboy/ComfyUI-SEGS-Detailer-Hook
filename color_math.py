@@ -158,3 +158,53 @@ def match_lab(original, generated, mask=None, strength=0.5, match_luminance=Fals
     return match_color(original, generated, mask, method="lab_chroma", strength=strength,
                        match_luminance=match_luminance, reference_region=reference_region,
                        mask_erosion=mask_erosion, max_std_scale=max_std_scale)
+
+
+
+def compute_matching_selector(original, mask=None, *, method="lab_chroma",
+                              reference_region="masked", mask_erosion=5,
+                              boundary_width=24, include_mask=None,
+                              exclude_mask=None):
+    """Return the boolean pixels sampled for a color-matching method.
+
+    This mirrors match_color's region-selection logic, with optional preview
+    include/exclude masks. Include/exclude inputs are currently debug-overlay
+    ONLY; the live ColorMatchDetailerHookProvider does not yet accept them.
+    """
+    if method not in METHODS:
+        raise ValueError(f"Unknown color matching method: {method}")
+    if reference_region not in ("masked", "whole_crop"):
+        raise ValueError(f"Unknown reference region: {reference_region}")
+
+    original = _rgb(original)
+    h, w = original.shape[:2]
+    selector = _mask_selector(mask, (h, w), reference_region, mask_erosion)
+
+    def resolve_optional(value):
+        if value is None:
+            return None
+        arr = np.asarray(value, dtype=np.float32).squeeze()
+        if arr.ndim != 2:
+            raise ValueError(f"Expected HxW optional mask, got {arr.shape}")
+        if arr.shape != (h, w):
+            arr = cv2.resize(arr, (w, h), interpolation=cv2.INTER_LINEAR)
+        return arr >= 0.5
+
+    inc = resolve_optional(include_mask)
+    exc = resolve_optional(exclude_mask)
+    if inc is not None:
+        selector &= inc
+    if exc is not None:
+        selector &= ~exc
+
+    if method == "boundary_chroma" and mask is not None and reference_region == "masked":
+        src_lab = cv2.cvtColor(original, cv2.COLOR_RGB2LAB)
+        selector = _boundary_selector(src_lab, selector, max(1, int(boundary_width)))
+        if inc is not None:
+            selector &= inc
+        if exc is not None:
+            selector &= ~exc
+
+    if np.count_nonzero(selector) < 64:
+        return np.zeros((h, w), dtype=bool)
+    return selector
