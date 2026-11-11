@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from .color_math import METHODS, match_color
+from .debug_overlay import SegsDebugOverlayNode
 
 log = logging.getLogger(__name__)
 
@@ -116,7 +117,9 @@ class ColorMatchDetailerHookProvider:
 
 NODE_CLASS_MAPPINGS = {
     "ColorMatchDetailerHookProvider": ColorMatchDetailerHookProvider,
+    "SegsDebugOverlayNode": SegsDebugOverlayNode,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ColorMatchDetailerHookProvider": "Color Match Detailer Hook (Multi-Mode)",
+    "SegsDebugOverlayNode": "SEGS Debug Overlay",
 }
