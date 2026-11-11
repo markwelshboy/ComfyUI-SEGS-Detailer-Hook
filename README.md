@@ -144,3 +144,70 @@ You can connect `include_mask_opt` and `exclude_mask_opt` to inspect how semanti
 - The overlay uses the original RGB pixels for region selection; its tints never feed into the matching calculations.
 - The BBOX and crop outlines show the current SEGS object, so they reflect any prior SEGS transformations. A crop may be clamped at the image edge.
 - For the most reliable diagnostics, use the same source resolution as the detector and inspect `combined_matching_mask` with Preview Mask.
+
+
+## Mask logic expressions — diffusion masks (new)
+
+Three additional nodes let you combine multiple full-image masks, then use the result as an Impact Pack **Detailer (SEGS)** diffusion/compositing mask. They do **not** generate semantic masks themselves: connect mask producers for skin, head, hair, eyes, etc.
+
+### 1. SEGS BBox Mask
+
+Inputs: original `IMAGE` and detector `SEGS`. Outputs `bbox_mask` (union of all detected bounding boxes in full-image coordinates) and unchanged `segs`.
+
+### 2. Mask Logic Expression
+
+Named optional MASK sockets: `bbox`, `human`, `skin`, `hair`, `head`, `face`, `eyes`, `nose`, `mouth`, `lips`, `ears`, `neck`, and `mask_a` through `mask_d`. Use `image_opt` to establish the source image dimensions. Unconnected names referenced in the expression give a readable error.
+
+Expressions allow case-insensitive `AND`, `OR`, `XOR`, `NOT` or symbols `&`, `|`, `^`, `~`, plus parentheses. Boolean logic operates after thresholding each mask at `threshold` (default 0.50). Invalid Python syntax and function calls are rejected; this is **not** a Python `eval()` node.
+
+Examples:
+
+```text
+bbox & skin
+head & ~hair
+(bbox & head) ^ hair
+(face | head) & ~(eyes | lips)
+```
+
+Outputs: composed full-image `mask` and `resolved_expression` for logging.
+
+### 3. Apply Mask To SEGS
+
+Inputs: original `image`, original `segs`, composed full-image `mask`, `mode`, `threshold`, and `fallback_to_original_if_empty`.
+
+- `replace`: overwrite each SEG's `cropped_mask` using the composed mask, cropped into that SEG's existing crop region.
+- `and_existing`: intersect with the original SEG cropped mask.
+- `or_existing`: union with the original mask within each crop.
+- `xor_existing`: symmetric difference with the original mask.
+- `fallback_to_original_if_empty`: disabled by default so an empty logical selection stays empty. Enable only if you intentionally want the old mask restored for empty results.
+
+The original SEG's bbox, confidence, label, and `crop_region` remain unchanged. Because the crop does **not** expand automatically, portions of a composed mask falling outside it are clipped; enlarge the crop upstream if needed.
+
+Outputs: updated `segs` and `combined_applied_mask` for Preview Mask.
+
+### Suggested wiring
+
+```text
+BBOX/SEGS Detector -----------------------------+
+  |                                              |
+  v                                              v
+SEGS BBox Mask -> bbox -------------------> Apply Mask To SEGS ---> Detailer (SEGS)
+                                          ^                            |
+Skin / Hair / Head semantic MASKs          |                            v
+      |                                   |                     Color Match Hook
+      +-> Mask Logic Expression ----------+
+          expression: bbox & skin & ~hair
+```
+
+Set `noise_mask=enabled` in **Detailer (SEGS)** when you want the new SEGS mask applied during sampling. Temporarily use `noise_mask_feather=0` to inspect strict mask behavior. Impact Pack still uses the SEGS mask for the final composite.
+
+You can send the updated SEGS to **SEGS Debug Overlay** to inspect the actual diffusion/compositing region. The color match hook receives this updated cropped mask when `noise_mask=enabled`, so using `reference_region=masked` provides a practical shared-mask workflow. **Independent full-image masks for color-matching statistics are not yet connected to the hook**, so do not expect the debug overlay's optional include/exclude masks to alter matching.
+
+**Batch note:** The mask-expression node can process mask batches, but the SEGS override node intentionally requires one source image at a time, consistent with Impact Pack Detailer (SEGS). For multiple distinct faces, each SEG retains its own crop, and the mask is cropped independently for each one; overlapping crop regions may contain pixels from more than one composed-mask component.
+
+### Test
+
+```bash
+cd /opt/ComfyUI/custom_nodes/ComfyUI-SEGS-Detailer-Hook
+python -m unittest discover -s tests -v
+```
